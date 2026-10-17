@@ -10,14 +10,14 @@ import os
 import re
 import sqlite3
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import flet as ft
 
 SCHOOL = "مدرسة ميسلون - الحلقة الثانية"
 CREDIT = "برمجة المهندس مهند النابلسي بلغة Python"
 EVALS = ["ممتاز", "جيد جداً", "جيد", "مقبول", "ضعيف"]
-HEAD = ["الاسم", "الصف", "الشعبة", "التقييم", "الغياب", "النشاط"]
+HEAD = ["الاسم", "الصف", "الشعبة", "التاريخ", "التقييم", "الغياب", "النشاط"]
 
 DATA_DIR = os.environ.get("FLET_APP_STORAGE_DATA") or os.path.dirname(os.path.abspath(__file__))
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -30,7 +30,10 @@ def connect():
     con.execute("""CREATE TABLE IF NOT EXISTS students(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL, grade TEXT, section TEXT,
-        evaluation TEXT, absence INTEGER DEFAULT 0, activity TEXT)""")
+        evaluation TEXT, absence INTEGER DEFAULT 0, activity TEXT, rec_date TEXT)""")
+    # ترقية قاعدة بيانات قديمة لا تحتوي عمود التاريخ
+    if "rec_date" not in [r[1] for r in con.execute("PRAGMA table_info(students)")]:
+        con.execute("ALTER TABLE students ADD COLUMN rec_date TEXT")
     con.commit()
     return con
 
@@ -52,14 +55,30 @@ def main(page: ft.Page):
     def toast(msg):
         page.open(ft.SnackBar(ft.Text(msg)))
 
+    def dlg_w():
+        # عرض المحتوى يتكيف مع عرض الشاشة حتى لا يخرج أي مربع عن الإطار
+        return int(max(240, min((page.width or 360) - 64, 400)))
+
+    def tf(label, **kw):
+        return ft.TextField(label=label, dense=True, text_size=13, text_align=R,
+                            label_style=ft.TextStyle(size=12),
+                            content_padding=ft.padding.symmetric(horizontal=10, vertical=8), **kw)
+
+    def make_dialog(title, content, actions):
+        return ft.AlertDialog(
+            title=ft.Text(title, size=16), content=content, actions=actions,
+            inset_padding=ft.padding.symmetric(horizontal=16, vertical=24),
+            title_padding=ft.padding.only(left=16, right=16, top=14, bottom=4),
+            content_padding=ft.padding.symmetric(horizontal=16, vertical=8),
+            actions_padding=ft.padding.symmetric(horizontal=12, vertical=8))
+
     def confirm(title, text, on_yes):
         def yes(e):
             page.close(dlg)
             on_yes()
-        dlg = ft.AlertDialog(
-            title=ft.Text(title), content=ft.Text(text),
-            actions=[ft.TextButton("إلغاء", on_click=lambda e: page.close(dlg)),
-                     ft.ElevatedButton("تأكيد", on_click=yes)])
+        dlg = make_dialog(title, ft.Text(text, size=13),
+                          [ft.TextButton("إلغاء", on_click=lambda e: page.close(dlg)),
+                           ft.ElevatedButton("تأكيد", on_click=yes)])
         page.open(dlg)
 
     # ---------------------------------------------------------- البيانات
@@ -71,15 +90,16 @@ def main(page: ft.Page):
             sql += " AND grade=? AND section=?"
             args += [g, s]
         return con.execute(
-            "SELECT id,name,grade,section,evaluation,absence,activity FROM students "
+            "SELECT id,name,grade,section,evaluation,absence,activity,rec_date FROM students "
             + sql + " ORDER BY grade,section,name", args).fetchall()
 
     def tile(r):
-        sid, name, g, s, ev, ab, _ = r
+        sid, name, g, s, ev, ab, _, d = r
         color = ft.Colors.GREEN_700 if ab == 0 else (ft.Colors.ORANGE_800 if ab < 3 else ft.Colors.RED_700)
+        sub = f"{g} - {s}   |   {ev or '—'}" + (f"\n{d}" if d else "")
         return ft.ListTile(
             title=ft.Text(name),
-            subtitle=ft.Text(f"{g} - {s}   |   {ev or '—'}"),
+            subtitle=ft.Text(sub, size=12),
             trailing=ft.Container(ft.Text(f"غياب {ab}", color=ft.Colors.WHITE, size=12),
                                   bgcolor=color, border_radius=12,
                                   padding=ft.padding.symmetric(horizontal=10, vertical=4)),
@@ -99,19 +119,38 @@ def main(page: ft.Page):
 
     # ---------------------------------------------------------- نافذة الطالب
     def student_dialog(sid=None):
-        r = ("", "", "", None, 0, "")
+        w = dlg_w()
+        half = (w - 8) // 2
+        r = ("", "", "", None, 0, "", datetime.now().strftime("%Y-%m-%d"))
         if sid:
-            r = con.execute("SELECT name,grade,section,evaluation,absence,activity FROM students WHERE id=?",
-                            (sid,)).fetchone()
-        f_name = ft.TextField(label="اسم الطالب", value=r[0], text_align=R)
-        f_grade = ft.TextField(label="الصف", value=r[1] or "", text_align=R, width=140)
-        f_sec = ft.TextField(label="الشعبة", value=r[2] or "", text_align=R, width=140)
-        f_ev = ft.Dropdown(label="التقييم", value=r[3] or None, width=300,
+            r = con.execute("SELECT name,grade,section,evaluation,absence,activity,rec_date "
+                            "FROM students WHERE id=?", (sid,)).fetchone()
+
+        def pick_date(e):
+            try:
+                cur = datetime.strptime(f_date.value, "%Y-%m-%d")
+            except ValueError:
+                cur = datetime.now()
+
+            def chosen(ev):
+                # +12 ساعة تعالج فرق التوقيت فيبقى اليوم المختار هو نفسه
+                v = ev.control.value.replace(tzinfo=None) + timedelta(hours=12)
+                f_date.value = v.strftime("%Y-%m-%d")
+                f_date.update()
+            page.open(ft.DatePicker(value=cur, first_date=datetime(2020, 1, 1),
+                                    last_date=datetime(2040, 12, 31), on_change=chosen))
+
+        f_name = tf("اسم الطالب", value=r[0], width=w)
+        f_grade = tf("الصف", value=r[1] or "", width=half)
+        f_sec = tf("الشعبة", value=r[2] or "", width=half)
+        f_date = tf("التاريخ", value=r[6] or "", width=w, read_only=True,
+                    suffix=ft.IconButton(ft.Icons.CALENDAR_MONTH, icon_size=20, on_click=pick_date))
+        f_ev = ft.Dropdown(label="التقييم", value=r[3] or None, width=w, dense=True, text_size=13,
+                           label_style=ft.TextStyle(size=12),
                            options=[ft.dropdown.Option(x) for x in EVALS])
+        f_act = tf("النشاط", value=r[5] or "", width=w, multiline=True, min_lines=2, max_lines=4)
         n = {"v": r[4] or 0}
-        ab = ft.Text(str(n["v"]), size=20, weight=ft.FontWeight.BOLD)
-        f_act = ft.TextField(label="النشاط", value=r[5] or "", multiline=True,
-                             min_lines=2, max_lines=5, text_align=R)
+        ab = ft.Text(str(n["v"]), size=18, weight=ft.FontWeight.BOLD)
 
         def step(d):
             n["v"] = max(0, n["v"] + d)
@@ -124,13 +163,13 @@ def main(page: ft.Page):
                 dlg.update()
                 return
             vals = [f_name.value.strip(), f_grade.value.strip(), f_sec.value.strip(),
-                    f_ev.value or "", n["v"], f_act.value.strip()]
+                    f_ev.value or "", n["v"], f_act.value.strip(), f_date.value or ""]
             if sid:
                 con.execute("UPDATE students SET name=?,grade=?,section=?,evaluation=?,"
-                            "absence=?,activity=? WHERE id=?", vals + [sid])
+                            "absence=?,activity=?,rec_date=? WHERE id=?", vals + [sid])
             else:
-                con.execute("INSERT INTO students(name,grade,section,evaluation,absence,activity) "
-                            "VALUES(?,?,?,?,?,?)", vals)
+                con.execute("INSERT INTO students(name,grade,section,evaluation,absence,activity,rec_date) "
+                            "VALUES(?,?,?,?,?,?,?)", vals)
             con.commit()
             page.close(dlg)
             refresh()
@@ -150,48 +189,52 @@ def main(page: ft.Page):
                                          style=ft.ButtonStyle(color=ft.Colors.RED_700)))
         actions += [ft.TextButton("إلغاء", on_click=lambda e: page.close(dlg)),
                     ft.ElevatedButton("حفظ", on_click=save)]
-        dlg = ft.AlertDialog(
-            title=ft.Text("تعديل بيانات طالب" if sid else "إضافة طالب"),
-            content=ft.Column([
-                f_name, ft.Row([f_grade, f_sec]), f_ev,
-                ft.Row([ft.Text("الغياب (أيام):"),
-                        ft.IconButton(ft.Icons.REMOVE_CIRCLE_OUTLINE, on_click=lambda e: step(-1)),
-                        ab,
-                        ft.IconButton(ft.Icons.ADD_CIRCLE_OUTLINE, on_click=lambda e: step(1))]),
-                f_act], tight=True, scroll=ft.ScrollMode.AUTO, width=300),
-            actions=actions)
+        absence_row = ft.Row(
+            [ft.Text("الغياب (أيام):", size=13),
+             ft.IconButton(ft.Icons.REMOVE_CIRCLE_OUTLINE, icon_size=22, on_click=lambda e: step(-1)),
+             ab,
+             ft.IconButton(ft.Icons.ADD_CIRCLE_OUTLINE, icon_size=22, on_click=lambda e: step(1))],
+            spacing=4, width=w)
+        dlg = make_dialog(
+            "تعديل بيانات طالب" if sid else "إضافة طالب",
+            ft.Column([f_name, ft.Row([f_grade, f_sec], spacing=8, width=w), f_date, f_ev,
+                       absence_row, f_act],
+                      tight=True, spacing=8, scroll=ft.ScrollMode.AUTO, width=w),
+            actions)
         page.open(dlg)
 
     def import_dialog(e=None):
-        box = ft.TextField(multiline=True, min_lines=6, max_lines=10, text_align=R,
-                           hint_text="أحمد علي, السابع, أ\nسعاد محمد, السابع, ب")
+        w = dlg_w()
+        box = tf("القائمة", width=w, multiline=True, min_lines=5, max_lines=8,
+                 hint_text="أحمد علي, السابع, أ\nسعاد محمد, السابع, ب")
 
         def do(e):
             n = 0
+            today = datetime.now().strftime("%Y-%m-%d")
             for line in (box.value or "").splitlines():
                 c = [x.strip() for x in re.split(r"[\t,;،]", line)]
                 if not c[0] or c[0] in ("الاسم", "name"):
                     continue
-                con.execute("INSERT INTO students(name,grade,section) VALUES(?,?,?)",
-                            (c + ["", ""])[:3])
+                con.execute("INSERT INTO students(name,grade,section,rec_date) VALUES(?,?,?,?)",
+                            ((c + ["", ""])[:3]) + [today])
                 n += 1
             con.commit()
             page.close(dlg)
             refresh()
             toast(f"تمت إضافة {n} طالب")
 
-        dlg = ft.AlertDialog(
-            title=ft.Text("استيراد طلاب"),
-            content=ft.Column([ft.Text("الصق القائمة: سطر لكل طالب (الاسم، الصف، الشعبة) "
-                                       "- يمكن نسخها من Excel.", size=12), box],
-                              tight=True, scroll=ft.ScrollMode.AUTO, width=300),
-            actions=[ft.TextButton("إلغاء", on_click=lambda e: page.close(dlg)),
-                     ft.ElevatedButton("استيراد", on_click=do)])
+        dlg = make_dialog(
+            "استيراد طلاب",
+            ft.Column([ft.Text("الصق القائمة: سطر لكل طالب (الاسم، الصف، الشعبة) "
+                               "- يمكن نسخها من Excel.", size=12), box],
+                      tight=True, spacing=8, scroll=ft.ScrollMode.AUTO, width=w),
+            [ft.TextButton("إلغاء", on_click=lambda e: page.close(dlg)),
+             ft.ElevatedButton("استيراد", on_click=do)])
         page.open(dlg)
 
     # ---------------------------------------------------------- Excel والطباعة
     def export_rows():
-        return [[r[1], r[2], r[3], r[4] or "", r[5], r[6] or ""] for r in fetch()]
+        return [[r[1], r[2], r[3], r[7] or "", r[4] or "", r[5], r[6] or ""] for r in fetch()]
 
     def out_path(ext):
         os.makedirs(OUT_DIR, exist_ok=True)
@@ -255,10 +298,10 @@ def main(page: ft.Page):
 
     lv = ft.ListView(expand=True)
     count = ft.Text("", size=12)
-    flt = ft.Dropdown(width=330, value="all", options=[ft.dropdown.Option("all", "كل الصفوف والشعب")],
-                      on_change=on_filter)
+    flt = ft.Dropdown(width=330, value="all", dense=True, text_size=13,
+                      options=[ft.dropdown.Option("all", "كل الصفوف والشعب")], on_change=on_filter)
     search = ft.TextField(hint_text="بحث بالاسم أو الصف أو الشعبة", prefix_icon=ft.Icons.SEARCH,
-                          dense=True, text_align=R, on_change=on_search)
+                          dense=True, text_size=13, text_align=R, on_change=on_search)
     top = ft.Column([
         ft.Row([ft.ElevatedButton("إضافة طالب", icon=ft.Icons.PERSON_ADD, on_click=lambda e: student_dialog()),
                 ft.OutlinedButton("استيراد", icon=ft.Icons.UPLOAD, on_click=import_dialog)], wrap=True),
