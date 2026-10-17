@@ -47,6 +47,11 @@ def main(page: ft.Page):
     page.rtl = True
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 0
+    try:
+        page.locale_configuration = ft.LocaleConfiguration(
+            supported_locales=[ft.Locale("ar", "SA")], current_locale=ft.Locale("ar", "SA"))
+    except Exception:
+        pass
     con = connect()
     st = {"q": "", "f": "all"}
     R = ft.TextAlign.RIGHT
@@ -57,7 +62,7 @@ def main(page: ft.Page):
 
     def dlg_w():
         # عرض المحتوى يتكيف مع عرض الشاشة حتى لا يخرج أي مربع عن الإطار
-        return int(max(240, min((page.width or 360) - 64, 400)))
+        return int(max(240, min((page.width or 360) - 96, 360)))
 
     def tf(label, **kw):
         return ft.TextField(label=label, dense=True, text_size=13, text_align=R,
@@ -298,7 +303,7 @@ def main(page: ft.Page):
 
     lv = ft.ListView(expand=True)
     count = ft.Text("", size=12)
-    flt = ft.Dropdown(width=330, value="all", dense=True, text_size=13,
+    flt = ft.Dropdown(width=int(min(330, (page.width or 360) - 16)), value="all", dense=True, text_size=13,
                       options=[ft.dropdown.Option("all", "كل الصفوف والشعب")], on_change=on_filter)
     search = ft.TextField(hint_text="بحث بالاسم أو الصف أو الشعبة", prefix_icon=ft.Icons.SEARCH,
                           dense=True, text_size=13, text_align=R, on_change=on_search)
@@ -311,7 +316,7 @@ def main(page: ft.Page):
     footer = ft.Container(ft.Text(CREDIT, size=12, weight=ft.FontWeight.BOLD, color=ft.Colors.TEAL_900),
                           alignment=ft.alignment.center, padding=6)
 
-    page.appbar = ft.AppBar(title=ft.Text(SCHOOL), center_title=True,
+    page.appbar = ft.AppBar(title=ft.Text(SCHOOL, size=18), center_title=True,
                             bgcolor=ft.Colors.TEAL_700, color=ft.Colors.WHITE)
     page.add(ft.SafeArea(content=ft.Column([
         ft.Container(top, padding=8),
