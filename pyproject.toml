@@ -1,0 +1,15 @@
+[project]
+name = "maysaloun"
+version = "1.0.0"
+description = "Maysaloun School - student tracking"
+requires-python = ">=3.10"
+dependencies = ["flet==0.28.3"]
+
+[tool.flet]
+org = "com.maysaloun"
+product = "Maysaloun"
+company = "Maysaloun School"
+copyright = "Programming: Eng. Mohannad Al-Nabulsi"
+
+[tool.flet.app]
+path = "."
